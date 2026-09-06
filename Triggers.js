@@ -10,44 +10,18 @@ const DynamicCommandEngine = {
   CONTROL_SHEET: "System_Control",
   HEADER_ROW: 2,
 
-  /**
-   * Returns the architectural guidelines and operational contract.
-   * @returns {string}
-   */
   getGuidelines() {
     return [
       "====================================================================================================",
-      "DO NOT REMOVE OR STRIP COMMENTS FROM THIS FILE.",
-      "----------------------------------------------------------------------------------------------------",
       "DYNAMIC COMMAND ENGINE & TRIGGER ARCHITECTURAL GUIDELINES:",
-      "",
-      "1. STRICT HEADER RESOLUTION (ROW 2):",
-      "   - Reads 'Lookup_Values' strictly starting on Header Row 2 via BatchProcessor.read().",
-      "   - Missing mandatory columns ('Category_ID', 'Item', 'Description') throw immediate errors.",
-      "",
-      "2. MULTI-WAY RESOLUTION (FAIL-FAST):",
-      "   - Resolves commands by Value_ID, Item, Description, or normalized string without spaces/emojis.",
-      "   - Zero silent failures: errors are recorded in System_Control!E2 and logged to Apps Script Logger.",
-      "",
-      "3. RUNTIME RETENTION & STATE TRACKING:",
-      "   - Retains chosen action text in System_Control!B2 during execution.",
-      "   - Sets Status (C2) to 'Running', updates timestamp in D2, and clears error in E2.",
-      "   - On completion, sets Status (C2) to 'Completed' and resets B2 to '- Select Action -'.",
-      "",
-      "4. ATOMIC CONCURRENCY & BACKGROUND SAFETY:",
-      "   - Safe for background triggers (no getUi calls in trigger flow).",
-      "   - Uses LockService with 10s timeout to safely debounce onEdit and onChange events.",
+      "1. Reads 'Lookup_Values' strictly starting on Header Row 2 via BatchProcessor.read().",
+      "2. Multi-way matching: Value_ID, Item, Description, or normalized string.",
+      "3. Retains action text in System_Control!B2 during run; completes with atomic lock release.",
+      "4. Safe for both UI Dropdown edits (onEdit) and AppSheet API edits (onChange).",
       "===================================================================================================="
     ].join("\n");
   },
 
-  getGuideline() {
-    return this.getGuidelines();
-  },
-
-  /**
-   * Universal Cleaner: Strips emojis, spaces, dashes, and underscores for 100% matching.
-   */
   cleanText(str) {
     return String(str || "")
       .replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, "")
@@ -63,20 +37,15 @@ const DynamicCommandEngine = {
     }
 
     const headers = table[0];
-
     const getRequiredCol = (name) => {
       const idx = headers.indexOf(name.toLowerCase());
-      if (idx === -1) {
-        throw new Error(`[Header Error] Missing mandatory column "${name}" in "${this.LOOKUP_SHEET}" (Row ${this.HEADER_ROW}).`);
-      }
+      if (idx === -1) throw new Error(`Missing column "${name}" in "${this.LOOKUP_SHEET}".`);
       return idx;
     };
 
-    const getOptionalCol = (name, fallbackName = null) => {
+    const getOptionalCol = (name, fallback = null) => {
       let idx = headers.indexOf(name.toLowerCase());
-      if (idx === -1 && fallbackName) {
-        idx = headers.indexOf(fallbackName.toLowerCase());
-      }
+      if (idx === -1 && fallback) idx = headers.indexOf(fallback.toLowerCase());
       return idx;
     };
 
@@ -151,9 +120,6 @@ const DynamicCommandEngine = {
     }
   },
 
-  /**
-   * Resolves and invokes action matching Value_ID, Item, Description, or clean string.
-   */
   dispatch(actionInput) {
     if (!actionInput) {
       throw new Error("[DynamicCommandEngine] No action input provided.");
@@ -166,8 +132,6 @@ const DynamicCommandEngine = {
 
     for (let i = 0; i < commands.length; i++) {
       const cmd = commands[i];
-
-      // Multi-way matching: Value_ID, exact Item, exact Description, or normalized clean string
       if (
         rawInput === cmd.valueId ||
         rawInput === cmd.item ||
@@ -181,26 +145,48 @@ const DynamicCommandEngine = {
       }
     }
 
-    if (!targetFn) {
-      targetFn = rawInput;
+    if (!targetFn) targetFn = rawInput;
+
+    // Resolve camelCase canonical aliases
+    const aliases = {
+      "optimizeall": "optimizeAll",
+      "optimize all": "optimizeAll",
+      "resetandrecalculateall": "resetAndRecalculateAll",
+      "reset & recalculate all stocks": "resetAndRecalculateAll",
+      "sorttransactions": "sortTransactions",
+      "sort transactions": "sortTransactions",
+      "sortandresequencetransactions": "sortTransactions",
+      "sortgooglefinance": "sortGoogleFinance",
+      "sort google finance": "sortGoogleFinance",
+      "sortandresequencegooglefinance": "sortGoogleFinance",
+      "addsortfacilitytopivot": "setupPivotSortControls",
+      "add sort facility to pivot": "setupPivotSortControls",
+      "setuppivotsortcontrols": "setupPivotSortControls",
+      "extendformat": "extendFormat",
+      "extend format": "extendFormat",
+      "listallformulas": "listAllFormulas",
+      "list all formulas": "listAllFormulas",
+      "listalltables": "listAllTables",
+      "list all tables": "listAllTables",
+      "runallaudits": "runAllAudits",
+      "run all audits": "runAllAudits",
+      "fixallarrayformulaerrors": "fixAllArrayFormulaErrors"
+    };
+
+    const resolvedName = aliases[this.cleanText(targetFn)] || targetFn;
+
+    if (typeof globalThis[resolvedName] !== "function") {
+      throw new Error(`[Execution Error] Function "${targetFn}" (resolved: "${resolvedName}") is not defined.`);
     }
 
-    if (typeof globalThis[targetFn] !== "function") {
-      throw new Error(`[Execution Error] Function "${targetFn}" is not defined in any script file.`);
-    }
-
-    // Direct invocation
-    globalThis[targetFn]();
+    globalThis[resolvedName]();
     return true;
   }
 };
 
 /**
- * ====================================================================
- * SPREADSHEET INITIALIZATION & TRIGGERS
- * ====================================================================
+ * TRIGGER ENTRY POINTS
  */
-
 function onOpen() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -208,31 +194,30 @@ function onOpen() {
     const menu = ui.createMenu("🚀 System Control");
 
     const commands = DynamicCommandEngine.loadCommands(ss);
-
     commands.forEach(cmd => {
-      if (typeof globalThis[cmd.item] === "function") {
+      const cleanTarget = DynamicCommandEngine.cleanText(cmd.item);
+      if (typeof globalThis[cmd.item] === "function" || cleanTarget) {
         menu.addItem(cmd.description, cmd.item);
-        if (cmd.addSeparator) {
-          menu.addSeparator();
-        }
+        if (cmd.addSeparator) menu.addSeparator();
       }
     });
 
     menu.addToUi();
     DynamicCommandEngine.syncDropdownValidation(ss);
-
   } catch (err) {
-    Logger.log(`[onOpen Fatal Error]: ${err.stack || err.message}`);
+    Logger.log(`[onOpen Error]: ${err.stack || err.message}`);
   }
 }
 
-function refreshDropdown() {
-  DynamicCommandEngine.syncDropdownValidation();
+/** Handles direct user edits in the Google Sheet UI */
+function onEdit(e) {
+  if (typeof PivotSortManager !== "undefined") {
+    PivotSortManager.handleEdit(e);
+  }
+  handleExternalChange(e);
 }
 
-/**
- * Centralized Execution Router: Safe for both UI Dropdown edits and AppSheet API edits.
- */
+
 function handleExternalChange(e) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const controlSheet = ss.getSheetByName("System_Control");
@@ -273,17 +258,18 @@ function handleExternalChange(e) {
   }
 }
 
-// Global Entry Points
+// Global API & Command Aliases
 function optimizeAll() { new PortfolioManager().optimizeAll(); }
 function resetAndRecalculateAll() { new PortfolioManager().resetAndRecalculateAll(); }
-function sortAndResequenceGoogleFinance() { const pm = new PortfolioManager(); pm.runWithStatus(() => pm.sortGoogleFinance()); }
-function sortAndResequenceTransactions() { const pm = new PortfolioManager(); pm.runWithStatus(() => pm.sortTransactions()); }
+function sortTransactions() { const pm = new PortfolioManager(); pm.runWithStatus(() => pm.sortTransactions()); }
+function sortAndResequenceTransactions() { sortTransactions(); }
+function sortGoogleFinance() { const pm = new PortfolioManager(); pm.runWithStatus(() => pm.sortGoogleFinance()); }
+function sortAndResequenceGoogleFinance() { sortGoogleFinance(); }
 function setupPivotSortControls() { new PivotSortManager().setupControls(); }
+function addSortFacilityToPivot() { setupPivotSortControls(); }
 function extendFormat(sheet) { TableFormatter.extend(sheet || SpreadsheetApp.getActiveSpreadsheet().getActiveSheet()); }
 function listAllFormulas() { new WorkbookAuditor().auditFormulas("Formula_Audit"); }
 function listAllTables() { new WorkbookAuditor().auditTables("Tables_Audit"); }
 function applyAllFormulaAudit() { new WorkbookAuditor().applyFormulas("Formula_Audit"); }
 function runAllAudits() { new WorkbookAuditor().runAllAudits(); }
-function fixAllArrayFormulaErrors(target = null) {
-  return WorkbookAuditor.fixAllArrayFormulaErrors(target);
-}
+function fixAllArrayFormulaErrors(target = null) { return WorkbookAuditor.fixAllArrayFormulaErrors(target); }

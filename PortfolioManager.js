@@ -3,74 +3,71 @@
  */
 class PortfolioManager {
 
-
   /* ====================================================================================================
- * DO NOT REMOVE OR STRIP COMMENTS FROM THIS FILE.
- * ----------------------------------------------------------------------------------------------------
- * MASTER SYSTEM ARCHITECTURE & OPERATIONAL SPECIFICATION:
- * 
- * ----------------------------------------------------------------------------------------------------
- * PART I: INTEGRATION & COMMAND CONTRACTS
- * ----------------------------------------------------------------------------------------------------
- * 1. UNIFIED COMMAND & MENU NAMES (EXACT MATCHING REQUIRED):
- *    - Commands triggered via AppSheet, the Google Sheets UI menu (`onOpen`), or the `System_Control` sheet 
- *      dropdown (Row 2, Column B) MUST match the exact canonical action names handled in `handleExternalChange`:
- *      * "Optimize All"
- *      * "Reset & Recalculate All Stocks"
- *      * "Sort Transactions"
- *      * "Sort Google Finance"
- *      * "Add Sort facility to pivot"
- *      * "Extend Format"
- *      * "List All Formulas"
- *      * "List All Tables"
- * 
- * 2. STRICT CANONICAL TABLE HEADERS (NO ALIASES):
- *    - All header strings in `ARRAY_FORMULAS` and `col()` lookups MUST match sheet table headers character-for-character.
- *    - Distinct Canonical Header Names:
- *      * `Stocks` sheet:     "Avg Cost", "Fut.Dividend %", "Tot. Liquidity Value", "Threeshold Quantity", "Total Protofolio P/L"
- *      * `platforms` sheet:    "Fut.Div %", "Tot. Liq. Value", "Div %"
- *      * `Transactions`:     "Avg. Cost"
- *    - Exact naming ensures `BatchProcessor` writes `null` to live `ARRAYFORMULA` columns, preventing `#REF!` errors.
- * 
- * 3. SELF-CONTAINED INTEGRATION & CASCADE LOOP GUARD:
- *    - Bound Script: Runs 100% inside the Google Spreadsheet instance without external servers or web services.
- *    - Cascade Loop Guard: `handleExternalChange` checks `getActiveSheet().getName() === "System_Control"`. Edits on any
- *      other sheet (`Transactions`, `Stocks`) exit immediately to prevent trigger recursion.
- *    - Control Panel State (`System_Control` Row 2): `runWithStatus()` sets Col C ("Status") to "Running" during execution,
- *      and atomically resets Col B ("Run") to "- Select Action -" and Col C to "Not Running" upon completion.
- * 
- * ----------------------------------------------------------------------------------------------------
- * PART II: FINANCIAL CALCULATION & EXECUTION RULES
- * ----------------------------------------------------------------------------------------------------
- * 4. POSITION & AVERAGE COST RULES:
- *    - Running Shares (`p.qty`): Total executed shares owned (`Buys - Sells`).
- *    - Unit Average Cost (`p.avg`): `Total Invested Cost / Total Shares`.
- *      * BUY / GIFT: Increases shares and invested capital, recalculating unit `p.avg`.
- *      * SELL: Proportionally reduces shares and invested capital. Selling NEVER alters unit `p.avg`.
- *      * SOLD OUT (`qty = 0`): Capital drops to 0, but the last unit `p.avg` is retained in memory & on `Stocks`.
- *    - Cost Selection Rule (`Stocks` sheet): Uses `normalAvgCost` (executed on/before today) unless null
- *      (when 100% of buys are pending future limit orders), in which case it falls back to `futureAvgCost`.
- * 
- * 5. EXECUTION DATE & DIVIDEND RULES:
- *    - Execution Date = Distribution / Payment Date (تاريخ التوزيع).
- *    - Transaction Date = Deserved / Eligibility Date (تاريخ الاستحقاق).
- *    - Execution Guard (`tExec <= todayLimit`): Pending future orders (`tExec > todayLimit`) do NOT affect
- *      active share balances (`p.qty`) or current average costs today.
- *    - Undeserved Dividends (Transaction Date > Today): Quantities auto-sync with active share balance.
- *    - Deserved / Past Dividends (Transaction Date <= Today): Immutable historical records (quantities locked).
- *    - Multi-platform Dividend Replication: Auto-creates dividend rows for all platforms holding shares on the
- *      Deserved Date (Transaction Date), assigning each new row a sequential primary key (`maxSerial + 1`).
- * 
- * ----------------------------------------------------------------------------------------------------
- * PART III: SURGICAL BATCHING & AUDIT LOGGING
- * ----------------------------------------------------------------------------------------------------
- * 6. SURGICAL BATCHING & RECALCULATION:
- *    - Normal Runs: Only recalculates stocks where `Last Update > Optimize Date` (or `Optimize Date` is empty).
- *    - Full Recalculation: `resetAndRecalculateAll()` clears `Optimize Date` across `Transactions` to force a 100% pass.
- *    - Consolidated Audit Logging: All operations write to `Optimize_Log` in a single pass (legacy `StockAudit` is unused).
- * ==================================================================================================== */
+   * DO NOT REMOVE OR STRIP COMMENTS FROM THIS FILE.
+   * ----------------------------------------------------------------------------------------------------
+   * MASTER SYSTEM ARCHITECTURE & OPERATIONAL SPECIFICATION:
+   * 
+   * ----------------------------------------------------------------------------------------------------
+   * PART I: INTEGRATION & COMMAND CONTRACTS
+   * ----------------------------------------------------------------------------------------------------
+   * 1. UNIFIED COMMAND & MENU NAMES (EXACT MATCHING REQUIRED):
+   *    - Commands triggered via AppSheet, the Google Sheets UI menu (`onOpen`), or the `System_Control` sheet 
+   *      dropdown (Row 2, Column B) MUST match the canonical action names handled in `handleExternalChange`:
+   *      * "Optimize All"
+   *      * "Reset & Recalculate All Stocks"
+   *      * "Sort Transactions"
+   *      * "Sort Google Finance"
+   *      * "Add Sort facility to pivot"
+   *      * "Extend Format"
+   *      * "List All Formulas"
+   *      * "List All Tables"
+   * 
+   * 2. STRICT CANONICAL TABLE HEADERS (NO ALIASES):
+   *    - All header strings in `ARRAY_FORMULAS` and `col()` lookups MUST match sheet table headers character-for-character.
+   *    - Distinct Canonical Header Names:
+   *      * `Stocks` sheet:     "Avg Cost", "Fut.Dividend %", "Tot. Liquidity Value", "Threeshold Quantity", "Total Protofolio P/L"
+   *      * `platforms` sheet:  "Fut.Div %", "Tot. Liq. Value", "Div %"
+   *      * `Transactions`:     "Avg. Cost"
+   *    - Exact naming ensures `BatchProcessor` writes `null` to live `ARRAYFORMULA` columns, preventing `#REF!` errors.
+   * 
+   * 3. SELF-CONTAINED INTEGRATION & CASCADE LOOP GUARD:
+   *    - Bound Script: Runs 100% inside the Google Spreadsheet instance without external servers.
+   *    - Cascade Loop Guard: Trigger flows verify `System_Control` row states before dispatching.
+   *    - Control Panel State (`System_Control` Row 2): `runWithStatus()` sets Col C ("Status") to "Running" during execution,
+   *      and atomically resets Col B ("Run") to "- Select Action -" and Col C to "Completed" upon completion.
+   * 
+   * ----------------------------------------------------------------------------------------------------
+   * PART II: FINANCIAL CALCULATION & EXECUTION RULES
+   * ----------------------------------------------------------------------------------------------------
+   * 4. POSITION & AVERAGE COST RULES:
+   *    - Running Shares (`p.qty`): Total executed shares owned (`Buys - Sells`).
+   *    - Unit Average Cost (`p.avg`): `Total Invested Cost / Total Shares`.
+   *      * BUY / GIFT: Increases shares and invested capital, recalculating unit `p.avg`.
+   *      * SELL: Proportionally reduces shares and invested capital. Selling NEVER alters unit `p.avg`.
+   *      * SOLD OUT (`qty = 0`): Capital drops to 0, but the last unit `p.avg` is retained in memory & on `Stocks`.
+   *    - Cost Selection Rule (`Stocks` sheet): Uses `normalAvgCost` (executed on/before today) unless null
+   *      (when 100% of buys are pending future limit orders), in which case it falls back to `futureAvgCost`.
+   * 
+   * 5. EXECUTION DATE & DIVIDEND RULES:
+   *    - Execution Date = Distribution / Payment Date (تاريخ التوزيع).
+   *    - Transaction Date = Deserved / Eligibility Date (تاريخ الاستحقاق).
+   *    - Execution Guard (`tExec <= todayLimit`): Pending future orders (`tExec > todayLimit`) do NOT affect
+   *      active share balances (`p.qty`) or current average costs today.
+   *    - Undeserved Dividends (Transaction Date > Today): Quantities auto-sync with active share balance.
+   *    - Deserved / Past Dividends (Transaction Date <= Today): Immutable historical records (quantities locked).
+   *    - Multi-platform Dividend Replication: Auto-creates dividend rows for all platforms holding shares on the
+   *      Deserved Date (Transaction Date), assigning each new row a sequential primary key (`maxSerial + 1`).
+   * 
+   * ----------------------------------------------------------------------------------------------------
+   * PART III: SURGICAL BATCHING & AUDIT LOGGING
+   * ----------------------------------------------------------------------------------------------------
+   * 6. SURGICAL BATCHING & RECALCULATION:
+   *    - Normal Runs: Only recalculates stocks where `Last Update > Optimize Date` (or `Optimize Date` is empty).
+   *    - Full Recalculation: `resetAndRecalculateAll()` clears `Optimize Date` across `Transactions` to force a 100% pass.
+   *    - Consolidated Audit Logging: All operations write to `Optimize_Log` in a single pass.
+   * ==================================================================================================== */
 
-  
   /**
    * Static Pre-compiled Date Regex for fast O(1) date key parsing.
    * @private
@@ -101,7 +98,7 @@ class PortfolioManager {
           "Market Value", "Liquidity Value", "Tot.Mkt.Value", "Tot. Liquidity Value", 
           "Total Cost", "Min + 0.5%", "Market +0.5%", "Mkt - Min", "Mkt - Min %", 
           "Cost - Min", "Cost - Min%", "Threeshold Quantity", "Quantity To Sell", 
-          "Safe Sell Price", "Quantity Of Min+0.5%", "Cash Needed", "System_Control Quantity", 
+          "Safe Sell Price", "Quantity Of Min+0.5%", "Cash Needed", "Extra Quantity", 
           "Holding", "Selling P/L", "Dividend", "Dividend %", "Fut.Dividend", 
           "Fut.Dividend %", "Share P/L", "Tot. Shares P/L", "Shares P/L %", 
           "Total Protofolio P/L", "Total P/L", "Total P/L %", "10% Profit", "10% Loss"
@@ -224,14 +221,14 @@ class PortfolioManager {
     // US Market: SEC + FINRA TAF + CAT + platform commission + VAT
     if (isUs) {
       const isAbyan = b.includes("abyan");
-      let usplatform = 0;
+      let usBrokerFee = 0;
       if (isSahm) {
         const baseFee = p <= 5 ? 0.49 : 1.99;
-        usplatform = Math.max(baseFee, Math.min(q * 0.015, tv * 0.015));
+        usBrokerFee = Math.max(baseFee, Math.min(q * 0.015, tv * 0.015));
       } else if (isAbyan) {
-        usplatform = Math.max(0.95, q * 0.0075);
+        usBrokerFee = Math.max(0.95, q * 0.0075);
       } else if (isAlrajhi) {
-        usplatform = Math.max(1.99, q * 0.0199);
+        usBrokerFee = Math.max(1.99, q * 0.0199);
       } else {
         return 0;
       }
@@ -246,7 +243,7 @@ class PortfolioManager {
         regFees = (isSell && !isAbyan) ? (tv * 0.0000278 + Math.min(Math.max(q * 0.000195, 0.01), 5.95)) : 0;
       }
 
-      return round2(usplatform * 1.15 + regFees) * sign;
+      return round2(usBrokerFee * 1.15 + regFees) * sign;
     }
 
     return 0;
@@ -286,7 +283,7 @@ class PortfolioManager {
   }
 
   _writeLogSheet(logEntries, timestamp) {
-    const headers = ["Timestamp", "Sheet Name", "Action", "Order", "platform", "Symbol", "Stock Name", "Order Type", "Details"];
+    const headers = ["Timestamp", "Sheet Name", "Action", "Order", "Platform", "Symbol", "Stock Name", "Order Type", "Details"];
 
     let logSheet = this.getSheet("Optimize_Log");
     if (!logSheet) {
@@ -316,9 +313,8 @@ class PortfolioManager {
     logSheet.setColumnWidth(9, 420);
   }
 
-/**
+  /**
    * Unified execution wrapper with live status and time tracking.
-   * (Self-blocking guard removed to allow trigger execution).
    */
   runWithStatus(actionFn) {
     const sheet = this.getSheet("System_Control");
@@ -336,7 +332,6 @@ class PortfolioManager {
     const tz = this.ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
     const getTimestamp = () => Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
 
-    // 1. Mark status as Running
     sheet.getRange(2, statusCol).setValue("Running");
     sheet.getRange(2, dateCol).setValue(getTimestamp());
     sheet.getRange(2, errorCol).clearContent();
@@ -351,7 +346,6 @@ class PortfolioManager {
       Logger.log(`❌ Execution Error: ${e.stack || e.message}`);
       throw e;
     } finally {
-      // 2. Mark Completed/Error and reset B2
       sheet.getRange(2, runCol).setValue("- Select Action -");
       sheet.getRange(2, statusCol).setValue(errorOccurred ? "Error" : "Completed");
       sheet.getRange(2, dateCol).setValue(getTimestamp());
@@ -386,7 +380,7 @@ class PortfolioManager {
             const googleMinIdx = col("Google Min");
             const exchangeIdx = col("Exchange");
             const combinedNameIdx = col("Combined Name");
-            const symbolIdx = col("Symbol"); // 👈 Symbol lookup
+            const symbolIdx = col("Symbol");
             const orderIdx = col("Order");
 
             const numRows = rawData.length;
@@ -426,7 +420,7 @@ class PortfolioManager {
 
               if (oldOrder !== newOrder) {
                 const combinedName = combinedNameIdx !== -1 ? String(r[combinedNameIdx] || "").trim() : "";
-                const symbol = symbolIdx !== -1 ? String(r[symbolIdx] || "").trim() : "N/A"; // 👈 System_Controlct Symbol
+                const symbol = symbolIdx !== -1 ? String(r[symbolIdx] || "").trim() : "N/A"; // Extract Symbol
 
                 standaloneLogs.push([
                   nowTimestamp,
@@ -434,7 +428,7 @@ class PortfolioManager {
                   "UPDATE",
                   newOrder,
                   "N/A",
-                  symbol, // 👈 Put Symbol in log
+                  symbol,
                   combinedName,
                   "N/A",
                   `Order changed from ${oldOrder} to ${newOrder}`
@@ -460,7 +454,7 @@ class PortfolioManager {
 
   /**
    * Sorts `Transactions` sheet chronologically.
-   * Multi-tier Sort: Execution Date -> Transaction Date -> Last Update -> Company -> Order Type -> Avg Cost
+   * Multi-tier Sort: Execution Date -> Transaction Date -> Company -> Order Type -> Last Update -> Avg Cost
    */
   sortTransactions(logEntries = null) {
     const sheet = this.getSheet("Transactions");
@@ -477,11 +471,11 @@ class PortfolioManager {
           if (index === 0) {
             const execDateIdx = col("Execution Date");
             const transDateIdx = col("Transaction Date");
-            const companyIdx = col("Company");
+            const companyIdx = col("Company") !== -1 ? col("Company") : col("Stock Name");
             const orderTypeIdx = col("Order Type");
-            const avgCostIdx = col("Avg. Cost");
+            const avgCostIdx = col("Avg. Cost") !== -1 ? col("Avg. Cost") : col("Avg Cost");
             const orderIdx = col("Order");
-            const platformIdx = col("platform");
+            const platformIdx = col("Platform") !== -1 ? col("Platform") : col("Broker");
             const symbolIdx = col("Symbol");
             const lastUpdateIdx = col("Last Update");
 
@@ -504,11 +498,11 @@ class PortfolioManager {
             decorated.sort((a, b) => {
               if (a.tExec !== b.tExec) return a.tExec - b.tExec;
               if (a.tTrans !== b.tTrans) return a.tTrans - b.tTrans;
-              if (a.tUpdate !== b.tUpdate) return a.tUpdate - b.tUpdate;
               const cComp = a.comp.localeCompare(b.comp);
               if (cComp !== 0) return cComp;
               const cType = a.type.localeCompare(b.type);
               if (cType !== 0) return cType;
+              if (a.tUpdate !== b.tUpdate) return a.tUpdate - b.tUpdate;
               return b.cost - a.cost;
             });
 
@@ -587,18 +581,18 @@ class PortfolioManager {
         2,
         (row, col, index, rawData) => {
           if (index === 0) {
-            const serialIdx = col("Serial");
+            const serialIdx = col("Transaction_ID") !== -1 ? col("Transaction_ID") : col("Serial");
             const execDateIdx = col("Execution Date");
             const transDateIdx = col("Transaction Date");
-            const companyIdx = col("Company");
+            const companyIdx = col("Company") !== -1 ? col("Company") : col("Stock Name");
             const orderTypeIdx = col("Order Type");
-            const avgCostIdx = col("Avg. Cost");
+            const avgCostIdx = col("Avg. Cost") !== -1 ? col("Avg. Cost") : col("Avg Cost");
             const orderIdx = col("Order");
-            const platformIdx = col("platform");
+            const platformIdx = col("Platform") !== -1 ? col("Platform") : col("Broker");
             const symbolIdx = col("Symbol");
             const qtyIdx = col("Quantity");
-            const priceIdx = col("Value");
-            const marketIdx = col("Exchange");
+            const priceIdx = col("Value") !== -1 ? col("Value") : col("Price");
+            const marketIdx = col("Exchange") !== -1 ? col("Exchange") : col("Market");
             const feeIdx = col("Fee");
             const totalFeeIdx = col("Total Fee");
             const lastUpdateIdx = col("Last Update");
@@ -683,7 +677,7 @@ class PortfolioManager {
             });
 
             const portfolioMap = {};
-            const symbolplatformsMap = new Map();
+            const symbolPlatformsMap = new Map();
             const todayLimit = new Date().setHours(23, 59, 59, 999);
             const todayStartMs = new Date().setHours(0, 0, 0, 0);
 
@@ -751,7 +745,7 @@ class PortfolioManager {
                 const cost = Math.round(p.avg * 10000) / 10000;
                 let mapItem = costDataMap.get(keyLower);
                 if (!mapItem) {
-                  mapItem = { normalAvgCost: null, futureAvgCost: null, origplatform: platform, origSymbol: symbol, origCompany: item.companyName, qty: p.qty };
+                  mapItem = { normalAvgCost: null, futureAvgCost: null, origPlatform: platform, origSymbol: symbol, origCompany: item.companyName, qty: p.qty };
                   costDataMap.set(keyLower, mapItem);
                 } else if (!mapItem.origCompany && item.companyName) {
                   mapItem.origCompany = item.companyName;
@@ -802,12 +796,12 @@ class PortfolioManager {
                   }
                 }
 
-                // MULTI-platform DIVIDEND REPLICATION (Check holdings on Deserved Date)
+                // MULTI-PLATFORM DIVIDEND REPLICATION (Check holdings on Deserved Date)
                 if (item.tTrans >= todayStartMs && symbol && item.transDateStr) {
-                  const targetplatforms = symbolplatformsMap.get(item.sLower);
-                  if (targetplatforms) {
-                    for (const targetplatformName of targetplatforms) {
-                      const targetBLower = targetplatformName.toLowerCase();
+                  const targetPlatforms = symbolPlatformsMap.get(item.sLower);
+                  if (targetPlatforms) {
+                    for (const targetPlatformName of targetPlatforms) {
+                      const targetBLower = targetPlatformName.toLowerCase();
                       if (targetBLower === item.bLower) continue;
 
                       const targetKeyLower = `${targetBLower}|${item.sLower}`;
@@ -825,10 +819,10 @@ class PortfolioManager {
 
                           if (serialIdx !== -1) cloneRow[serialIdx] = maxSerial;
                           if (orderIdx !== -1) cloneRow[orderIdx] = repOrderNum; 
-                          if (platformIdx !== -1) cloneRow[platformIdx] = targetplatformName;
+                          if (platformIdx !== -1) cloneRow[platformIdx] = targetPlatformName;
                           if (qtyIdx !== -1) cloneRow[qtyIdx] = targetP.qty;
 
-                          const targetTotalFee = PortfolioManager.calculateFee(item.market, targetplatformName, item.rawType, targetP.qty, priceVal);
+                          const targetTotalFee = PortfolioManager.calculateFee(item.market, targetPlatformName, item.rawType, targetP.qty, priceVal);
                           const targetSingleFee = targetP.qty > 0 ? Math.round((targetTotalFee / targetP.qty) * 10000) / 10000 : 0;
 
                           if (feeIdx !== -1) cloneRow[feeIdx] = targetSingleFee;
@@ -845,7 +839,7 @@ class PortfolioManager {
                             "Transactions",
                             "INSERT",
                             repOrderNum,
-                            targetplatformName,
+                            targetPlatformName,
                             symbol,
                             item.companyName,
                             item.rawType || "Dividend",
@@ -858,10 +852,10 @@ class PortfolioManager {
                 }
               }
 
-              let bSet = symbolplatformsMap.get(item.sLower);
+              let bSet = symbolPlatformsMap.get(item.sLower);
               if (!bSet) {
                 bSet = new Set();
-                symbolplatformsMap.set(item.sLower, bSet);
+                symbolPlatformsMap.set(item.sLower, bSet);
               }
               if (p.qty > 0) {
                 bSet.add(platform);
@@ -935,7 +929,7 @@ class PortfolioManager {
       benchmark.time("Process & Write Stocks Pass", () => {
         let matchedKeys = new Set();
         let sLastCol = 0;
-        let idxplatform = -1, idxSymbol = -1, idxCompany = -1, idxCost = -1, lastUpdateIdx = -1;
+        let idxPlatform = -1, idxSymbol = -1, idxCompany = -1, idxCost = -1, lastUpdateIdx = -1;
         const formulaIndices = [];
 
         BatchProcessor.process(
@@ -943,9 +937,9 @@ class PortfolioManager {
           2,
           (row, col, index, rawData) => {
             if (index === 0) {
-              idxplatform = col("platform");
+              idxPlatform = col("Platform") !== -1 ? col("Platform") : col("Broker");
               idxSymbol = col("Symbol");
-              idxCompany = col("Company");
+              idxCompany = col("Company") !== -1 ? col("Company") : col("Stock Name");
               idxCost = col("Avg Cost");
               sLastCol = row.length;
               lastUpdateIdx = col("Last Update");
@@ -957,7 +951,7 @@ class PortfolioManager {
               });
             }
 
-            const platform = String(row[idxplatform] || "").trim();
+            const platform = String(row[idxPlatform] || "").trim();
             const symbol = String(row[idxSymbol] || "").trim();
             const stockName = idxCompany !== -1 ? String(row[idxCompany] || "").trim() : "";
             const keyLower = (platform && symbol) ? `${platform.toLowerCase()}|${symbol.toLowerCase()}` : null;
@@ -972,7 +966,7 @@ class PortfolioManager {
                   const target2pt = Math.round(targetRaw * 100) / 100;
                   const currentCost = Math.round((Number(row[idxCost]) || 0) * 100) / 100;
 
-                  if (idxplatform !== -1) row[idxplatform] = item.origplatform || platform;
+                  if (idxPlatform !== -1) row[idxPlatform] = item.origPlatform || platform;
                   if (idxSymbol !== -1) row[idxSymbol] = item.origSymbol || symbol;
 
                   const costChanged = Math.abs(currentCost - target2pt) > 0.011;
@@ -987,7 +981,7 @@ class PortfolioManager {
                       "Stocks",
                       "UPDATE",
                       "N/A",
-                      item.origplatform,
+                      item.origPlatform,
                       item.origSymbol,
                       item.origCompany || stockName,
                       "N/A",
@@ -1005,7 +999,7 @@ class PortfolioManager {
                   const finalCost = PortfolioManager.getEffectiveCost(item);
                   const newRow = new Array(sLastCol).fill("");
 
-                  if (idxplatform !== -1) newRow[idxplatform] = item.origplatform;
+                  if (idxPlatform !== -1) newRow[idxPlatform] = item.origPlatform;
                   if (idxSymbol !== -1) newRow[idxSymbol] = item.origSymbol;
                   if (idxCompany !== -1) newRow[idxCompany] = item.origCompany || "";
                   if (idxCost !== -1) newRow[idxCost] = Math.round(finalCost * 10000) / 10000;
@@ -1022,7 +1016,7 @@ class PortfolioManager {
                     "Stocks",
                     "INSERT",
                     "N/A",
-                    item.origplatform,
+                    item.origPlatform,
                     item.origSymbol,
                     item.origCompany || "",
                     "N/A",
@@ -1041,10 +1035,9 @@ class PortfolioManager {
       });
     }
 
-
-    // =======================================================================
+    // =========================================================================
     // STAGE 4: SYNCHRONIZE AUDIT TABLES (Tables_Audit & Formula_Audit)
-    // =======================================================================
+    // =========================================================================
     benchmark.time("Synchronize Audits", () => {
       if (typeof runAllAudits === "function") {
         runAllAudits();
@@ -1053,7 +1046,6 @@ class PortfolioManager {
         if (typeof listAllFormulas === "function") listAllFormulas();
       }
     });
-
 
     // =========================================================================
     // STAGE 5: WRITE AUDIT LOG SHEET
@@ -1067,8 +1059,9 @@ class PortfolioManager {
     // =========================================================================
     this._formatSheets(["Transactions", "Stocks"], benchmark);
 
-    const totalSec = benchmark.report();
-    this.ss.toast(`Optimizations complete in ${totalSec}s. Log written to Optimize_Log.`, "Optimize All", 5);
+    const reportMetrics = benchmark.report();
+    const durationLabel = reportMetrics?.totalDurationSec || "few seconds";
+    this.ss.toast(`Optimizations complete in ${durationLabel}. Log written to Optimize_Log.`, "Optimize All", 5);
   }
 
   /**
@@ -1105,5 +1098,4 @@ class PortfolioManager {
   resetAndRecalculateAll() {
     this.runWithStatus(() => this._resetAndRecalculateAllCore());
   }
-
 }
