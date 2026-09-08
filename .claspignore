@@ -1,0 +1,16 @@
+# Ignore documentation & markdown
+*.md
+*.txt
+*.pdf
+docs/**
+appsheet/**
+
+# Ignore git files
+.git/**
+.gitignore
+.github/**
+
+# Ignore local config files
+*.env
+package*.json
+node_modules/**
