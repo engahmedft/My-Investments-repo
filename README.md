@@ -10,7 +10,6 @@
 
 ### 2. Automation & Execution Engine (Google Apps Script)
 * **Codebase Repository:** [GitHub: `engahmedft/My-Investments-repo`](https://github.com/engahmedft/My-Investments-repo)
-* **Script Project Editor:** [Google Apps Script Project](https://script.google.com/home/projects/1vDCqZl8wwwBoTFWBT_3BwXUEafaBCXqEFRULKSaY1ovIE7QQ8cY-Ga50/edit)
 * **Core Modules:**
   * `PortfolioManager.js` – WAC financial calculations, fee engines (Saudi 15% VAT / US 30% tax), and dividend replication.
   * `BatchProcessor.js` – High-performance 1-Read / 1-Write batch I/O and Zero-Write change detection.
