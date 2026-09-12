@@ -1,7 +1,7 @@
 # My-Investment System
 
 ## 1. Database & Schema Layer (Google Sheets)
-* **Live Published Sheet:** [Insert Public Spreadsheet URL here]
+* **Live Published Sheet:** https://docs.google.com/spreadsheets/d/e/2PACX-1vSekkQGc4fEyvY_FM-a_F0JjGi2Q6PD-Z4K6Zl4PTdehPd-agtChOzxXr85zajLKaw9qEiAHLjmnD2j/pubhtml
 * **Table Structures (`Tables_Audit` tab):** Auto-generated inventory capturing all table dimensions, header rows, and column positions.
 * **Formulas & Dependencies (`Formula_Audit` tab):** Live catalog documenting every static and ARRAYFORMULA cell definition across all workbook sheets.
 
