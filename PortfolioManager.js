@@ -97,13 +97,13 @@ class PortfolioManager {
           "Exchange", "Company", "Combined Name", "Field", "Quantity", "Year Min", 
           "Market Value", "Liquidity Value", "Tot.Mkt.Value", "Tot. Liquidity Value", 
           "Total Cost", "Min + 0.5%", "Market +0.5%", "Mkt - Min", "Mkt - Min %", 
-          "Cost - Min", "Cost - Min%", "Threeshold Quantity", "Quantity To Sell", 
+          "Cost - Min", "Cost - Min%", "Threshold Quantity", "Quantity To Sell", 
           "Safe Sell Price", "Quantity Of Min+0.5%", "Cash Needed", "Extra Quantity", 
           "Holding", "Selling P/L", "Dividend", "Dividend %", "Fut.Dividend", 
           "Fut.Dividend %", "Share P/L", "Tot. Shares P/L", "Shares P/L %", 
-          "Total Protofolio P/L", "Total P/L", "Total P/L %", "10% Profit", "10% Loss"
+          "Total Portfolio P/L", "Total P/L", "Total P/L %", "10% Profit", "10% Loss"
         ],
-        "platforms": [
+        "Platforms": [
           "Active Stocks", "Inactive Stocks", "Cost Portfolio", "Market Portfolio", 
           "Liquidity Portfolio", "Holding", "Total Cash", "Total Cost", "Tot.Mkt.Value", 
           "Tot. Liq. Value", "Selling P/L", "Dividend", "Div %", "Fut.Dividend", 
@@ -361,95 +361,84 @@ class PortfolioManager {
   }
 
   /**
-   * Sorts `Google_Finance_Data` sheet.
-   * Order: Exchange Category -> Active Status -> Symbol Name.
+   * Sorts the Google_Finance_Data sheet:
+   * 
+   * Priority Order:
+   * 1. Exchange Category (SA -> US -> GOLD -> Others)
+   * 2. Data Feed Status:
+   *    - Needs Manual Entry (Google Finance Not Available / empty "Google Min") -> Placed FIRST (0)
+   *    - Automated Feed (Google Finance Connected / populated "Google Min")    -> Placed SECOND (1)
+   * 3. Symbol Name (Alphabetical by "Combined Name")
+   * 
+   * Why Manual First?
+   * Instruments without automated Google Finance support require manual price entry.
+   * Placing them at the top of each exchange section ensures immediate visibility.
    */
-  sortGoogleFinance(logEntries = null) {
+  sortGoogleFinance() {
     const sheet = this.getSheet("Google_Finance_Data");
     if (!sheet || !this._validateHeaders(sheet, 2)) return;
 
-    let sortedData = null;
-    const nowTimestamp = new Date();
+    BatchProcessor.process(
+      sheet,
+      2,
+      (row, col, index, rawData) => {
+        if (index === 0) {
+          const exchangeIdx = col("Exchange");
+          const googleMinIdx = col("Google Min");
+          const combinedNameIdx = col("Combined Name");
 
-    try {
-      BatchProcessor.process(
-        sheet,
-        2,
-        (row, col, index, rawData) => {
-          if (index === 0) {
-            const googleMinIdx = col("Google Min");
-            const exchangeIdx = col("Exchange");
-            const combinedNameIdx = col("Combined Name");
-            const symbolIdx = col("Symbol");
-            const orderIdx = col("Order");
+          const numRows = rawData.length;
+          const decorated = new Array(numRows);
 
-            const numRows = rawData.length;
-            const decorated = new Array(numRows);
+          for (let i = 0; i < numRows; i++) {
+            const r = rawData[i];
+            const ex = String(r[exchangeIdx] || "").trim().toUpperCase();
 
-            for (let i = 0; i < numRows; i++) {
-              const r = rawData[i].slice();
-              const ex = String(r[exchangeIdx] || "").trim().toUpperCase();
-              
-              const rank = (ex === "SA" || ex === "KSA" || ex === "SAUDI") ? 0 :
+            // Tier 1: Exchange Classification Rank
+            const exRank = (ex === "SA" || ex === "KSA" || ex === "SAUDI") ? 0 :
                            (ex === "US" || ex === "USA" || ex === "AMERICAN") ? 1 :
                            (ex === "GOLD" || ex === "XAU") ? 2 : 3;
-              
-              const minVal = r[googleMinIdx];
-              const active = (minVal !== "" && minVal !== null && minVal !== undefined) ? 1 : 0;
-              const name = String(r[combinedNameIdx] || "").toLowerCase();
-              
-              decorated[i] = { row: r, rank, active, name };
-            }
 
-            decorated.sort((a, b) => {
-              if (a.rank !== b.rank) return a.rank - b.rank;
-              if (a.active !== b.active) return a.active - b.active;
-              return a.name.localeCompare(b.name);
-            });
+            // Tier 2: Google Finance Feed Status
+            // 0 = Empty/Unavailable in Google Finance -> Needs Manual Entry (Show at TOP)
+            // 1 = Populated/Available in Google Finance -> Automated Feed
+            const minVal = r[googleMinIdx];
+            const isGoogleAvailable = (minVal !== "" && minVal !== null && minVal !== undefined);
+            const feedStatusRank = isGoogleAvailable ? 1 : 0;
 
-            sortedData = new Array(numRows);
-            const standaloneLogs = logEntries || [];
+            // Tier 3: Normalized Symbol Name for consistent alphabetical ordering
+            const symbolName = String(r[combinedNameIdx] || "").trim().toLowerCase();
 
-            for (let i = 0; i < numRows; i++) {
-              const r = decorated[i].row;
-              const newOrder = i + 1;
-              const oldOrder = orderIdx !== -1 ? (Number(r[orderIdx]) || newOrder) : newOrder;
-
-              if (orderIdx !== -1) r[orderIdx] = newOrder;
-              sortedData[i] = r;
-
-              if (oldOrder !== newOrder) {
-                const combinedName = combinedNameIdx !== -1 ? String(r[combinedNameIdx] || "").trim() : "";
-                const symbol = symbolIdx !== -1 ? String(r[symbolIdx] || "").trim() : "N/A"; // Extract Symbol
-
-                standaloneLogs.push([
-                  nowTimestamp,
-                  "Google_Finance_Data",
-                  "UPDATE",
-                  newOrder,
-                  "N/A",
-                  symbol,
-                  combinedName,
-                  "N/A",
-                  `Order changed from ${oldOrder} to ${newOrder}`
-                ]);
-              }
-            }
-
-            if (!logEntries && standaloneLogs.length > 0) {
-              this._writeLogSheet(standaloneLogs, nowTimestamp);
-            }
+            decorated[i] = {
+              row: r,
+              exRank: exRank,
+              feedStatusRank: feedStatusRank,
+              symbolName: symbolName
+            };
           }
 
-          return [sortedData[index]];
-        },
-        PortfolioManager.getArrayFormulas("Google_Finance_Data")
-      );
+          // Composite Sort Execution
+          decorated.sort((a, b) => {
+            // 1. Group by Exchange
+            if (a.exRank !== b.exRank) {
+              return a.exRank - b.exRank;
+            }
+            // 2. Prioritize Manual Entry (0 comes before 1)
+            if (a.feedStatusRank !== b.feedStatusRank) {
+              return a.feedStatusRank - b.feedStatusRank;
+            }
+            // 3. Alphabetical by Combined Name
+            return a.symbolName.localeCompare(b.symbolName);
+          });
 
-      this.ss.toast("Google_Finance_Data sorted and re-sequenced.", "Success", 3);
-    } catch (e) {
-      this.ss.toast(e.message, "Sort Error", 10);
-    }
+          // Cache sorted rows to stream back to BatchProcessor
+          this._sortedGFData = decorated.map(d => d.row);
+        }
+
+        return [this._sortedGFData[index]];
+      },
+      PortfolioManager.getArrayFormulas("Google_Finance_Data")
+    );
   }
 
   /**
